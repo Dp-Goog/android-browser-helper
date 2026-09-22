@@ -15,14 +15,18 @@
 package com.google.androidbrowserhelper.trusted;
 
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 import android.os.Handler;
 import android.os.Looper;
+
+import java.util.List;
 
 import androidx.annotation.Nullable;
 import androidx.browser.trusted.TrustedWebActivityIntent;
@@ -66,7 +70,10 @@ public class ShortcutTrampolineActivity extends Activity {
             // finish immediately, while the TwaLauncher will do asynchronous work (connecting
             // to Custom Tabs Service) and eventually launch the TWA.
             Context appContext = getApplicationContext();
-            TwaLauncher twaLauncher = new TwaLauncher(appContext, metadata.launchingBrowser) {
+            Integer runningTaskId = findRunningTwaTaskId();
+            Integer sessionId = SessionStore.makeSessionId(runningTaskId);
+            TwaLauncher twaLauncher = new TwaLauncher(appContext, metadata.launchingBrowser, sessionId,
+                    new SharedPreferencesTokenStore(appContext)) {
                 @Override
                 protected TrustedWebActivityIntent onPrepareIntent(TrustedWebActivityIntent intent) {
                     intent.getIntent().addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -183,5 +190,36 @@ public class ShortcutTrampolineActivity extends Activity {
         return scheme1.equalsIgnoreCase(scheme2) &&
                 host1.equalsIgnoreCase(host2) &&
                 port1 == port2;
+    }
+
+    private @Nullable Integer findRunningTwaTaskId() {
+        ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+        if (am == null) return null;
+        List<ActivityManager.AppTask> appTasks;
+        try {
+            appTasks = am.getAppTasks();
+        } catch (Exception e) {
+            return null;
+        }
+        if (appTasks == null) return null;
+        int currentTaskId = getTaskId();
+        for (ActivityManager.AppTask appTask : appTasks) {
+            try {
+                ActivityManager.RecentTaskInfo taskInfo = appTask.getTaskInfo();
+                if (taskInfo == null || taskInfo.id == currentTaskId) {
+                    continue;
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    if (taskInfo.isRunning) {
+                        return taskInfo.id;
+                    }
+                } else {
+                    return taskInfo.id;
+                }
+            } catch (IllegalArgumentException | SecurityException e) {
+                // Ignore tasks that may no longer exist.
+            }
+        }
+        return null;
     }
 }

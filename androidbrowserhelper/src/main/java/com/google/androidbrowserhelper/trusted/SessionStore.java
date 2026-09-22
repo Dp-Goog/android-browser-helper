@@ -20,15 +20,7 @@ public class SessionStore {
      * @return The corresponding session ID, or {Integer.MAX_VALUE} if taskId is null.
      */
     public static Integer makeSessionId(@Nullable Integer taskId) {
-        if(taskId == null) return Integer.MAX_VALUE;
-
-        Integer sessionId = mTaskIdToSessionId.get(taskId);
-        if(sessionId == null) {
-            Random random = new Random();
-            sessionId = random.nextInt(Integer.MAX_VALUE);
-            mTaskIdToSessionId.put(taskId, sessionId);
-        }
-
-        return sessionId;
+        if (taskId == null) return Integer.MAX_VALUE;
+        return taskId;
     }
 }

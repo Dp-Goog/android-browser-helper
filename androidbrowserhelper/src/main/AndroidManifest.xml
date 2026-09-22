@@ -28,6 +28,7 @@
         <activity
             android:name="com.google.androidbrowserhelper.trusted.ShortcutTrampolineActivity"
             android:theme="@android:style/Theme.NoDisplay"
+            android:taskAffinity=""
             android:exported="true"/>
     </application>
 </manifest>
