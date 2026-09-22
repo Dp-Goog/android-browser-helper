@@ -71,6 +71,20 @@ public class ShortcutTrampolineActivity extends Activity {
             // to Custom Tabs Service) and eventually launch the TWA.
             Context appContext = getApplicationContext();
             Integer runningTaskId = findRunningTwaTaskId();
+
+            if (runningTaskId == null) {
+                // Cold launch: No TWA task is running. Start ColdShortcutActivity in a new task.
+                // Because ColdShortcutActivity is opaque (Theme.NoTitleBar), DesktopModeCompatPolicy
+                // does not trigger translucent exemptions, and the task is rooted in the TWA package
+                // so the taskbar running-app indicator is correctly attributed to the TWA icon.
+                Intent coldLaunchIntent = new Intent(this, ColdShortcutActivity.class);
+                coldLaunchIntent.setData(uri);
+                coldLaunchIntent.putExtra(TrustedWebUtils.EXTRA_LAUNCH_AS_TRUSTED_WEB_ACTIVITY, true);
+                coldLaunchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(coldLaunchIntent);
+                return;
+            }
+
             Integer sessionId = SessionStore.makeSessionId(runningTaskId);
             TwaLauncher twaLauncher = new TwaLauncher(appContext, metadata.launchingBrowser, sessionId,
                     new SharedPreferencesTokenStore(appContext)) {
