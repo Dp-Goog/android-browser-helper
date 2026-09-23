@@ -15,9 +15,16 @@
 package com.google.androidbrowserhelper.trusted;
 
 /**
- * An opaque launcher activity used exclusively for cold shortcut launches on desktop.
- * Being opaque prevents DesktopModeCompatPolicy translucent exemptions while ensuring
- * the task is rooted in the TWA package so the taskbar running-app indicator is attributed
- * to the TWA icon.
+ * An opaque launcher activity used exclusively for cold shortcut launches on desktop
+ * environments (e.g. ChromeOS / Android PC).
+ * <p>
+ * On desktop form factors, starting an opaque activity in a new task avoids
+ * {@code DesktopModeCompatPolicy} translucent activity exemptions (which freeze caption
+ * controls and desktop windows), while establishing a task root in the TWA package so that the
+ * system taskbar running-app indicator is correctly attributed to the TWA icon.
+ * <p>
+ * On mobile devices, {@link ShortcutTrampolineActivity} routes cold shortcut launches directly
+ * via {@link TwaLauncher} to preserve the invisible trampoline experience without rendering
+ * an empty starting window.
  */
 public class ColdShortcutActivity extends LauncherActivity {}

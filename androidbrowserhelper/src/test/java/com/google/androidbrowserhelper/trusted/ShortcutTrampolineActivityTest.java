@@ -112,7 +112,9 @@ public class ShortcutTrampolineActivityTest {
     }
 
     @Test
-    public void launchesColdShortcutActivity_whenNoTwaTaskRunning() {
+    public void launchesColdShortcutActivity_whenNoTwaTaskRunningOnDesktop() {
+        mShadowPackageManager.setSystemFeature(ChromeOsSupport.ARC_FEATURE, true);
+
         Uri trustedUri = Uri.parse("https://www.example.com/twa/shortcut");
         Intent intent = new Intent(Intent.ACTION_VIEW).setData(trustedUri);
 
@@ -124,12 +126,66 @@ public class ShortcutTrampolineActivityTest {
         // The trampoline activity finishes synchronously.
         assertTrue(controller.get().isFinishing());
 
-        // Cold launch starts ColdShortcutActivity directly in a new task.
+        // Cold launch on desktop starts ColdShortcutActivity directly in a new task.
         Intent launchedIntent = shadowOf(controller.get()).getNextStartedActivity();
         assertNotNull(launchedIntent);
         assertEquals(new ComponentName(mContext, ColdShortcutActivity.class), launchedIntent.getComponent());
         assertEquals(trustedUri, launchedIntent.getData());
-        assertTrue(launchedIntent.getBooleanExtra(TrustedWebUtils.EXTRA_LAUNCH_AS_TRUSTED_WEB_ACTIVITY, false));
+        assertEquals(Intent.FLAG_ACTIVITY_NEW_TASK, launchedIntent.getFlags() & Intent.FLAG_ACTIVITY_NEW_TASK);
+    }
+
+    @Test
+    public void launchesTwaViaLauncher_whenColdLaunchOnMobile() {
+        // Desktop features absent (standard mobile device environment).
+        Uri trustedUri = Uri.parse("https://www.example.com/twa/shortcut");
+        Intent intent = new Intent(Intent.ACTION_VIEW).setData(trustedUri);
+
+        ActivityController<ShortcutTrampolineActivity> controller =
+                Robolectric.buildActivity(ShortcutTrampolineActivity.class, intent);
+
+        controller.create();
+        shadowOf(Looper.getMainLooper()).idle();
+
+        assertTrue(controller.get().isFinishing());
+
+        // Mobile cold launch routes via TwaLauncher without creating an opaque ColdShortcutActivity.
+        Intent launchedIntent = shadowOf(RuntimeEnvironment.application).getNextStartedActivity();
+        assertNotNull(launchedIntent);
+        assertNotEquals(new ComponentName(mContext, ColdShortcutActivity.class), launchedIntent.getComponent());
+        assertEquals(Intent.ACTION_VIEW, launchedIntent.getAction());
+        assertEquals(trustedUri, launchedIntent.getData());
+        assertEquals(Intent.FLAG_ACTIVITY_NEW_TASK, launchedIntent.getFlags() & Intent.FLAG_ACTIVITY_NEW_TASK);
+    }
+
+    @Test
+    public void launchesCustomColdShortcutActivity_whenConfiguredInMetadata() {
+        mShadowPackageManager.setSystemFeature(ChromeOsSupport.ARC_FEATURE, true);
+
+        String customColdActivity = ".CustomColdShortcutActivity";
+        mShadowPackageManager.addOrUpdateActivity(
+                new ActivityInfo() {{
+                    packageName = mContext.getPackageName();
+                    name = LauncherActivity.class.getName();
+                    metaData = new Bundle();
+                    metaData.putString("android.support.customtabs.trusted.DEFAULT_URL", DEFAULT_URL);
+                    metaData.putString("android.support.customtabs.trusted.COLD_SHORTCUT_ACTIVITY", customColdActivity);
+                }});
+
+        Uri trustedUri = Uri.parse("https://www.example.com/twa/shortcut");
+        Intent intent = new Intent(Intent.ACTION_VIEW).setData(trustedUri);
+
+        ActivityController<ShortcutTrampolineActivity> controller =
+                Robolectric.buildActivity(ShortcutTrampolineActivity.class, intent);
+
+        controller.create();
+
+        assertTrue(controller.get().isFinishing());
+
+        Intent launchedIntent = shadowOf(controller.get()).getNextStartedActivity();
+        assertNotNull(launchedIntent);
+        assertEquals(new ComponentName(mContext, mContext.getPackageName() + customColdActivity),
+                launchedIntent.getComponent());
+        assertEquals(trustedUri, launchedIntent.getData());
         assertEquals(Intent.FLAG_ACTIVITY_NEW_TASK, launchedIntent.getFlags() & Intent.FLAG_ACTIVITY_NEW_TASK);
     }
 
@@ -140,6 +196,7 @@ public class ShortcutTrampolineActivityTest {
         ShadowAppTask shadowAppTask = shadowOf(task);
         ActivityManager.RecentTaskInfo taskInfo = new ActivityManager.RecentTaskInfo();
         taskInfo.id = 123;
+        taskInfo.baseIntent = new Intent().setComponent(new ComponentName(mContext, LauncherActivity.class));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             taskInfo.taskId = 123;
             taskInfo.isRunning = true;
@@ -165,6 +222,39 @@ public class ShortcutTrampolineActivityTest {
         assertEquals(Intent.ACTION_VIEW, launchedIntent.getAction());
         assertEquals(trustedUri, launchedIntent.getData());
         assertEquals(Intent.FLAG_ACTIVITY_NEW_TASK, launchedIntent.getFlags() & Intent.FLAG_ACTIVITY_NEW_TASK);
+    }
+
+    @Test
+    public void launchesColdShortcutActivity_whenRunningTaskIsNotTwa() {
+        mShadowPackageManager.setSystemFeature(ChromeOsSupport.ARC_FEATURE, true);
+
+        // Simulate a running non-TWA task (e.g. WebViewFallbackActivity).
+        ActivityManager.AppTask task = ShadowAppTask.newInstance();
+        ShadowAppTask shadowAppTask = shadowOf(task);
+        ActivityManager.RecentTaskInfo taskInfo = new ActivityManager.RecentTaskInfo();
+        taskInfo.id = 456;
+        taskInfo.baseIntent = new Intent().setComponent(new ComponentName(mContext, WebViewFallbackActivity.class));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            taskInfo.taskId = 456;
+            taskInfo.isRunning = true;
+        }
+        shadowAppTask.setTaskInfo(taskInfo);
+        mShadowActivityManager.setAppTasks(Collections.singletonList(task));
+
+        Uri trustedUri = Uri.parse("https://www.example.com/twa/shortcut");
+        Intent intent = new Intent(Intent.ACTION_VIEW).setData(trustedUri);
+
+        ActivityController<ShortcutTrampolineActivity> controller =
+                Robolectric.buildActivity(ShortcutTrampolineActivity.class, intent);
+
+        controller.create();
+
+        assertTrue(controller.get().isFinishing());
+
+        // Non-TWA task is ignored; cold launch starts ColdShortcutActivity.
+        Intent launchedIntent = shadowOf(controller.get()).getNextStartedActivity();
+        assertNotNull(launchedIntent);
+        assertEquals(new ComponentName(mContext, ColdShortcutActivity.class), launchedIntent.getComponent());
     }
 
     @Test

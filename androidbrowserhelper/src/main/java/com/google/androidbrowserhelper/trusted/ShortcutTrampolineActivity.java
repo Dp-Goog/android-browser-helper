@@ -17,8 +17,11 @@ package com.google.androidbrowserhelper.trusted;
 import android.app.Activity;
 import android.app.ActivityManager;
 import android.content.ActivityNotFoundException;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ActivityInfo;
+import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -37,8 +40,22 @@ import androidx.browser.trusted.TrustedWebActivityIntentBuilder;
 
 /**
  * A trampoline activity that handles Trusted Web Activity shortcuts.
- * It is defined as a noDisplay activity, meaning it finishes in onCreate()
+ * It is defined as a noDisplay activity, meaning it finishes in {@link #onCreate}
  * before any layout is drawn.
+ * <p>
+ * When static shortcuts declared in {@code res/xml/shortcuts.xml} are invoked, Android's
+ * {@code ShortcutService} automatically adds {@link Intent#FLAG_ACTIVITY_NEW_TASK} and
+ * {@link Intent#FLAG_ACTIVITY_CLEAR_TASK} to the intent.
+ * To prevent the system from destroying an already running TWA task (which uses the app's
+ * default package {@code taskAffinity}), this activity declares {@code android:taskAffinity=""}
+ * and {@code android:excludeFromRecents="true"} in the manifest.
+ * <p>
+ * On desktop environments (e.g. ChromeOS / Android PC), if no TWA task is running, a new task
+ * rooted in the TWA package is started via {@link ColdShortcutActivity} (or a custom configured
+ * activity) to prevent {@code DesktopModeCompatPolicy} translucent activity freezes and ensure
+ * proper taskbar running-indicator attribution.
+ * On mobile devices or when a TWA task is already running, the shortcut is routed directly via
+ * {@link TwaLauncher}.
  */
 public class ShortcutTrampolineActivity extends Activity {
     private static final String TAG = "ShortcutTrampoline";
@@ -70,16 +87,30 @@ public class ShortcutTrampolineActivity extends Activity {
             // finish immediately, while the TwaLauncher will do asynchronous work (connecting
             // to Custom Tabs Service) and eventually launch the TWA.
             Context appContext = getApplicationContext();
-            Integer runningTaskId = findRunningTwaTaskId(appContext, getTaskId());
+            Integer runningTaskId = findRunningTwaTaskId(appContext, getTaskId(), metadata.launcherComponent);
 
-            if (runningTaskId == null) {
-                // Cold launch: No TWA task is running. Start ColdShortcutActivity in a new task.
-                // Because ColdShortcutActivity is opaque (Theme.NoTitleBar), DesktopModeCompatPolicy
-                // does not trigger translucent exemptions, and the task is rooted in the TWA package
-                // so the taskbar running-app indicator is correctly attributed to the TWA icon.
-                Intent coldLaunchIntent = new Intent(this, ColdShortcutActivity.class);
+            PackageManager pm = appContext.getPackageManager();
+            boolean isDesktop = ChromeOsSupport.isRunningOnArc(pm)
+                    || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1
+                    && pm.hasSystemFeature(PackageManager.FEATURE_PC));
+
+            if (isDesktop && runningTaskId == null) {
+                // Cold launch on desktop: Start ColdShortcutActivity (or a custom configured
+                // activity) in a new task. Because ColdShortcutActivity is opaque (Theme.NoTitleBar),
+                // DesktopModeCompatPolicy does not trigger translucent exemptions, and the task is
+                // rooted in the TWA package so the taskbar running-app indicator is correctly
+                // attributed to the TWA icon.
+                Intent coldLaunchIntent = new Intent();
+                if (metadata.coldShortcutActivity != null) {
+                    String targetClass = metadata.coldShortcutActivity;
+                    if (targetClass.startsWith(".")) {
+                        targetClass = getPackageName() + targetClass;
+                    }
+                    coldLaunchIntent.setComponent(new ComponentName(this, targetClass));
+                } else {
+                    coldLaunchIntent.setClass(this, ColdShortcutActivity.class);
+                }
                 coldLaunchIntent.setData(uri);
-                coldLaunchIntent.putExtra(TrustedWebUtils.EXTRA_LAUNCH_AS_TRUSTED_WEB_ACTIVITY, true);
                 coldLaunchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 startActivity(coldLaunchIntent);
                 return;
@@ -206,7 +237,8 @@ public class ShortcutTrampolineActivity extends Activity {
                 port1 == port2;
     }
 
-    private static @Nullable Integer findRunningTwaTaskId(Context context, int currentTaskId) {
+    private static @Nullable Integer findRunningTwaTaskId(
+            Context context, int currentTaskId, @Nullable ComponentName twaLauncherComponent) {
         ActivityManager am = (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
         if (am == null) return null;
         List<ActivityManager.AppTask> appTasks;
@@ -219,7 +251,11 @@ public class ShortcutTrampolineActivity extends Activity {
         for (ActivityManager.AppTask appTask : appTasks) {
             try {
                 ActivityManager.RecentTaskInfo taskInfo = appTask.getTaskInfo();
-                if (taskInfo == null) {
+                if (taskInfo == null || taskInfo.baseIntent == null) {
+                    continue;
+                }
+                ComponentName component = taskInfo.baseIntent.getComponent();
+                if (!isMatchingTwaComponent(context, component, twaLauncherComponent)) {
                     continue;
                 }
                 int taskId = taskInfo.id;
@@ -244,5 +280,56 @@ public class ShortcutTrampolineActivity extends Activity {
             }
         }
         return null;
+    }
+
+    private static boolean isMatchingTwaComponent(
+            Context context, @Nullable ComponentName component, @Nullable ComponentName twaLauncherComponent) {
+        if (component == null) {
+            return false;
+        }
+        String className = component.getClassName();
+
+        // 1. Matches ColdShortcutActivity
+        if (ColdShortcutActivity.class.getName().equals(className)) {
+            return true;
+        }
+
+        // 2. Matches the resolved launcher component for this TWA
+        if (twaLauncherComponent != null) {
+            if (component.equals(twaLauncherComponent)) {
+                return true;
+            }
+            // Handle activity-alias where baseIntent might refer to the target activity or alias
+            try {
+                PackageManager pm = context.getPackageManager();
+                ActivityInfo info = pm.getActivityInfo(component, 0);
+                if (info.targetActivity != null &&
+                        info.targetActivity.equals(twaLauncherComponent.getClassName())) {
+                    return true;
+                }
+                ActivityInfo launcherInfo = pm.getActivityInfo(twaLauncherComponent, 0);
+                if (launcherInfo.targetActivity != null &&
+                        launcherInfo.targetActivity.equals(className)) {
+                    return true;
+                }
+            } catch (PackageManager.NameNotFoundException ignored) {}
+        }
+
+        // 3. Matches default LauncherActivity
+        if (LauncherActivity.class.getName().equals(className)) {
+            return true;
+        }
+
+        // 4. Fallback if launcher component was unresolvable: verify if class extends LauncherActivity
+        if (twaLauncherComponent == null) {
+            try {
+                Class<?> cls = Class.forName(className, false, context.getClassLoader());
+                if (LauncherActivity.class.isAssignableFrom(cls)) {
+                    return true;
+                }
+            } catch (Throwable ignored) {}
+        }
+
+        return false;
     }
 }
