@@ -70,7 +70,7 @@ public class ShortcutTrampolineActivity extends Activity {
             // finish immediately, while the TwaLauncher will do asynchronous work (connecting
             // to Custom Tabs Service) and eventually launch the TWA.
             Context appContext = getApplicationContext();
-            Integer runningTaskId = findRunningTwaTaskId();
+            Integer runningTaskId = findRunningTwaTaskId(appContext, getTaskId());
 
             if (runningTaskId == null) {
                 // Cold launch: No TWA task is running. Start ColdShortcutActivity in a new task.
@@ -206,8 +206,8 @@ public class ShortcutTrampolineActivity extends Activity {
                 port1 == port2;
     }
 
-    private @Nullable Integer findRunningTwaTaskId() {
-        ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+    private static @Nullable Integer findRunningTwaTaskId(Context context, int currentTaskId) {
+        ActivityManager am = (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
         if (am == null) return null;
         List<ActivityManager.AppTask> appTasks;
         try {
@@ -216,19 +216,28 @@ public class ShortcutTrampolineActivity extends Activity {
             return null;
         }
         if (appTasks == null) return null;
-        int currentTaskId = getTaskId();
         for (ActivityManager.AppTask appTask : appTasks) {
             try {
                 ActivityManager.RecentTaskInfo taskInfo = appTask.getTaskInfo();
-                if (taskInfo == null || taskInfo.id == currentTaskId) {
+                if (taskInfo == null) {
                     continue;
                 }
+                int taskId = taskInfo.id;
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    if (taskInfo.taskId > 0) {
+                        taskId = taskInfo.taskId;
+                    }
+                    if (taskId == currentTaskId || taskId <= 0) {
+                        continue;
+                    }
                     if (taskInfo.isRunning) {
-                        return taskInfo.id;
+                        return taskId;
                     }
                 } else {
-                    return taskInfo.id;
+                    if (taskId == currentTaskId || taskId <= 0) {
+                        continue;
+                    }
+                    return taskId;
                 }
             } catch (IllegalArgumentException | SecurityException e) {
                 // Ignore tasks that may no longer exist.
