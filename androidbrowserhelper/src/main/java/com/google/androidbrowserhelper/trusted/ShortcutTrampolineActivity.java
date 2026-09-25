@@ -87,7 +87,12 @@ public class ShortcutTrampolineActivity extends Activity {
             // finish immediately, while the TwaLauncher will do asynchronous work (connecting
             // to Custom Tabs Service) and eventually launch the TWA.
             Context appContext = getApplicationContext();
-            Integer runningTaskId = findRunningTwaTaskId(appContext, getTaskId(), metadata.launcherComponent);
+            String coldShortcutClass = metadata.coldShortcutActivity;
+            if (coldShortcutClass != null && coldShortcutClass.startsWith(".")) {
+                coldShortcutClass = getPackageName() + coldShortcutClass;
+            }
+            Integer runningTaskId = findRunningTwaTaskId(
+                    appContext, getTaskId(), metadata.launcherComponent, coldShortcutClass);
 
             PackageManager pm = appContext.getPackageManager();
             boolean isDesktop = ChromeOsSupport.isRunningOnArc(pm)
@@ -101,12 +106,8 @@ public class ShortcutTrampolineActivity extends Activity {
                 // rooted in the TWA package so the taskbar running-app indicator is correctly
                 // attributed to the TWA icon.
                 Intent coldLaunchIntent = new Intent();
-                if (metadata.coldShortcutActivity != null) {
-                    String targetClass = metadata.coldShortcutActivity;
-                    if (targetClass.startsWith(".")) {
-                        targetClass = getPackageName() + targetClass;
-                    }
-                    coldLaunchIntent.setComponent(new ComponentName(this, targetClass));
+                if (coldShortcutClass != null) {
+                    coldLaunchIntent.setComponent(new ComponentName(this, coldShortcutClass));
                 } else {
                     coldLaunchIntent.setClass(this, ColdShortcutActivity.class);
                 }
@@ -237,8 +238,8 @@ public class ShortcutTrampolineActivity extends Activity {
                 port1 == port2;
     }
 
-    private static @Nullable Integer findRunningTwaTaskId(
-            Context context, int currentTaskId, @Nullable ComponentName twaLauncherComponent) {
+    private static @Nullable Integer findRunningTwaTaskId(Context context, int currentTaskId,
+            @Nullable ComponentName twaLauncherComponent, @Nullable String coldShortcutClass) {
         ActivityManager am = (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
         if (am == null) return null;
         List<ActivityManager.AppTask> appTasks;
@@ -255,7 +256,8 @@ public class ShortcutTrampolineActivity extends Activity {
                     continue;
                 }
                 ComponentName component = taskInfo.baseIntent.getComponent();
-                if (!isMatchingTwaComponent(context, component, twaLauncherComponent)) {
+                if (!isMatchingTwaComponent(
+                        context, component, twaLauncherComponent, coldShortcutClass)) {
                     continue;
                 }
                 int taskId = taskInfo.id;
@@ -282,15 +284,18 @@ public class ShortcutTrampolineActivity extends Activity {
         return null;
     }
 
-    private static boolean isMatchingTwaComponent(
-            Context context, @Nullable ComponentName component, @Nullable ComponentName twaLauncherComponent) {
+    private static boolean isMatchingTwaComponent(Context context,
+            @Nullable ComponentName component, @Nullable ComponentName twaLauncherComponent,
+            @Nullable String coldShortcutClass) {
         if (component == null) {
             return false;
         }
         String className = component.getClassName();
 
-        // 1. Matches ColdShortcutActivity
-        if (ColdShortcutActivity.class.getName().equals(className)) {
+        // 1. Matches ColdShortcutActivity, or the custom activity configured via the
+        // COLD_SHORTCUT_ACTIVITY metadata (i.e. a task started by a cold shortcut launch).
+        if (ColdShortcutActivity.class.getName().equals(className)
+                || className.equals(coldShortcutClass)) {
             return true;
         }
 

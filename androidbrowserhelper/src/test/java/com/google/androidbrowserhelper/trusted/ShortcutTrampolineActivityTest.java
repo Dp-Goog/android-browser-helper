@@ -225,6 +225,55 @@ public class ShortcutTrampolineActivityTest {
     }
 
     @Test
+    public void launchesTwaViaLauncher_whenCustomColdShortcutTaskRunningOnDesktop() {
+        mShadowPackageManager.setSystemFeature(ChromeOsSupport.ARC_FEATURE, true);
+
+        String customColdActivity = ".CustomColdShortcutActivity";
+        mShadowPackageManager.addOrUpdateActivity(
+                new ActivityInfo() {{
+                    packageName = mContext.getPackageName();
+                    name = LauncherActivity.class.getName();
+                    metaData = new Bundle();
+                    metaData.putString("android.support.customtabs.trusted.DEFAULT_URL", DEFAULT_URL);
+                    metaData.putString("android.support.customtabs.trusted.COLD_SHORTCUT_ACTIVITY", customColdActivity);
+                }});
+
+        // Simulate a TWA task that was started by the custom cold shortcut activity.
+        ComponentName customColdComponent =
+                new ComponentName(mContext, mContext.getPackageName() + customColdActivity);
+        ActivityManager.AppTask task = ShadowAppTask.newInstance();
+        ShadowAppTask shadowAppTask = shadowOf(task);
+        ActivityManager.RecentTaskInfo taskInfo = new ActivityManager.RecentTaskInfo();
+        taskInfo.id = 123;
+        taskInfo.baseIntent = new Intent().setComponent(customColdComponent);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            taskInfo.taskId = 123;
+            taskInfo.isRunning = true;
+        }
+        shadowAppTask.setTaskInfo(taskInfo);
+        mShadowActivityManager.setAppTasks(Collections.singletonList(task));
+
+        Uri trustedUri = Uri.parse("https://www.example.com/twa/shortcut");
+        Intent intent = new Intent(Intent.ACTION_VIEW).setData(trustedUri);
+
+        ActivityController<ShortcutTrampolineActivity> controller =
+                Robolectric.buildActivity(ShortcutTrampolineActivity.class, intent);
+
+        controller.create();
+        shadowOf(Looper.getMainLooper()).idle();
+
+        assertTrue(controller.get().isFinishing());
+
+        // The running custom cold shortcut task is recognized, so the shortcut takes the warm
+        // TwaLauncher path instead of starting another cold shortcut activity.
+        Intent launchedIntent = shadowOf(RuntimeEnvironment.application).getNextStartedActivity();
+        assertNotNull(launchedIntent);
+        assertNotEquals(customColdComponent, launchedIntent.getComponent());
+        assertEquals(Intent.ACTION_VIEW, launchedIntent.getAction());
+        assertEquals(trustedUri, launchedIntent.getData());
+    }
+
+    @Test
     public void launchesColdShortcutActivity_whenRunningTaskIsNotTwa() {
         mShadowPackageManager.setSystemFeature(ChromeOsSupport.ARC_FEATURE, true);
 
